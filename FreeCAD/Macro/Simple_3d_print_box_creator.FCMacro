@@ -1,0 +1,203 @@
+# -*- coding: utf-8 -*-
+#
+# Simple_3d_print_box_creator.FCMacro
+#
+# by weigu.lu
+#
+# https://wiki.freecad.org/Manual:Creating_interface_tools
+
+__Name__ = 'Simple_3d_print_box_creator'
+__Comment__ = 'Creates a simple box with lid that can be clipped'
+__Author__ = 'weigu.lu'
+__Version__ = '1.0.0'
+__Date__ = '2024-04-23'
+__License__ = 'LGPL-3.0-or-later'
+__Web__ = 'https:www.weigu.lu'
+__Help__ = 'Try it out and play with it. It should be self explanatory'
+__Status__ = 'Zeta'
+__Files__ = 'Simple_3d_print_box_creator.FCMacro, Simple_3d_print_box_creator.ui'
+
+import FreeCAD,FreeCADGui,Part
+from BOPTools import BOPFeatures
+
+# Get location of user macros
+macro_path = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Macro").GetString("MacroPath")
+#FreeCAD.Console.PrintMessage(macro_path)
+ui_file = macro_path + "/" + __Name__ + ".ui"
+#FreeCAD.Console.PrintMessage(ui_file)
+
+# Names
+case_inside_name = "case_inside"
+case_outside_name = "case_outside"
+case_cut_name = "case_cut_inside_outside"
+case_fusion_name = "fusion_case_tongues"
+case_name = "case"
+case_tongue_left_name = "tongue_left"
+case_tongue_right_name = "tongue_right"
+lid_inside_name = "lid_inside"
+lid_outside_name = "lid_outside"
+lid_cut_name = "lid_cut_inside_outside"
+lid_cutr_name = "lid_cut_groove"
+lid_cutl_name = "lid_cut_groove_left"
+lid_name = "lid"
+lid_groove_left_name = "lid_groove_left"
+lid_groove_right_name = "lid_groove_right"
+
+class Box_UI:
+   def __init__(self):
+       # this will create a Qt widget from our ui file
+       self.form = FreeCADGui.PySideUic.loadUi(ui_file)       
+ 
+   def accept(self):
+       length = self.form.box_length.value()
+       App.Console.PrintMessage(length)
+       width = self.form.box_width.value()
+       height = self.form.box_height.value()
+       thickness = self.form.box_thickness.value()
+       if (length == 0) or (width == 0) or (height == 0) or (thickness == 0):
+           print("Error! None of the values can be 0!")
+           return # we bail out without doing anything
+       make_case(length, width, height, thickness)
+       FreeCADGui.Control.closeDialog()
+
+def make_case(length, width, height, thickness):
+    # make case cut
+    if thickness < 2:
+         tongue_radius = 0.5
+    else:
+         tongue_radius = 1
+    groove_radius = tongue_radius*1.1
+    tongue_distance_from_edge = width/10
+    lid_height = tongue_radius*4
+    lid_play = 0.3
+    groove_distance_from_edge = tongue_distance_from_edge-1
+    App.ActiveDocument.addObject("Part::Box",case_inside_name)
+    App.ActiveDocument.ActiveObject.Label = case_inside_name
+    App.ActiveDocument.ActiveObject.Length = length
+    App.ActiveDocument.ActiveObject.Width = width
+    App.ActiveDocument.ActiveObject.Height = height
+    App.ActiveDocument.addObject("Part::Box",case_outside_name)
+    App.ActiveDocument.ActiveObject.Label = case_outside_name
+    App.ActiveDocument.ActiveObject.Length = length+thickness*2
+    App.ActiveDocument.ActiveObject.Width = width+thickness*2
+    App.ActiveDocument.ActiveObject.Height = height+thickness
+    App.ActiveDocument.ActiveObject.Placement.Base = -thickness, -thickness, -thickness
+    cut_2_objects(case_outside_name,case_inside_name)
+    App.ActiveDocument.getObject('Cut').Label = case_cut_name
+    # make left tongue and groove
+    App.ActiveDocument.addObject("Part::Cylinder",case_tongue_left_name)
+    App.ActiveDocument.ActiveObject.Label = case_tongue_left_name
+    App.ActiveDocument.ActiveObject.Radius = tongue_radius
+    App.ActiveDocument.ActiveObject.Height = width-tongue_distance_from_edge*2
+    App.ActiveDocument.ActiveObject.Placement.Rotation = App.Rotation(App.Vector(1,0,0),-90) 
+    App.ActiveDocument.ActiveObject.Placement.Base = -thickness,tongue_distance_from_edge, \
+                                                     height - tongue_radius
+    App.ActiveDocument.addObject("Part::Cylinder",lid_groove_left_name)
+    App.ActiveDocument.ActiveObject.Label = lid_groove_left_name
+    App.ActiveDocument.ActiveObject.Radius = groove_radius
+    App.ActiveDocument.ActiveObject.Height = width-groove_distance_from_edge*2
+    App.ActiveDocument.ActiveObject.Placement.Rotation = App.Rotation(App.Vector(1,0,0),-90) 
+    App.ActiveDocument.ActiveObject.Placement.Base = -thickness - lid_play, \
+                                                     groove_distance_from_edge, \
+                                                     tongue_radius
+    # make right tongue and groove
+    App.ActiveDocument.addObject("Part::Cylinder",case_tongue_right_name)
+    App.ActiveDocument.ActiveObject.Label = case_tongue_right_name
+    App.ActiveDocument.ActiveObject.Radius = tongue_radius
+    App.ActiveDocument.ActiveObject.Height = width-tongue_distance_from_edge*2
+    App.ActiveDocument.ActiveObject.Placement.Rotation = App.Rotation(App.Vector(1,0,0),-90) 
+    App.ActiveDocument.ActiveObject.Placement.Base = length + thickness, \
+                                                     tongue_distance_from_edge, \
+                                                     height - tongue_radius
+    App.ActiveDocument.addObject("Part::Cylinder",lid_groove_right_name)
+    App.ActiveDocument.ActiveObject.Label = lid_groove_right_name
+    App.ActiveDocument.ActiveObject.Radius = groove_radius
+    App.ActiveDocument.ActiveObject.Height = width-groove_distance_from_edge*2
+    App.ActiveDocument.ActiveObject.Placement.Rotation = App.Rotation(App.Vector(1,0,0),-90) 
+    App.ActiveDocument.ActiveObject.Placement.Base = length + thickness+lid_play, \
+                                                     groove_distance_from_edge, \
+                                                     tongue_radius
+    fuse_3_objects("Cut", case_tongue_left_name, case_tongue_right_name)
+    App.ActiveDocument.getObject('Fusion').Label = case_fusion_name
+    add_fillets_to_case()
+    App.ActiveDocument.getObject('Fillet').Label = case_name
+    # make lid cut
+    App.ActiveDocument.addObject("Part::Box",lid_inside_name)
+    App.ActiveDocument.ActiveObject.Label = lid_inside_name
+    App.ActiveDocument.ActiveObject.Length = length + thickness*2 + lid_play*2
+    App.ActiveDocument.ActiveObject.Width = width + thickness*2 + lid_play*2
+    App.ActiveDocument.ActiveObject.Height = lid_height
+    App.ActiveDocument.ActiveObject.Placement.Base = -thickness-lid_play, -thickness-lid_play, 0
+    App.ActiveDocument.addObject("Part::Box",lid_outside_name)
+    App.ActiveDocument.ActiveObject.Label = lid_outside_name
+    App.ActiveDocument.ActiveObject.Length = length+thickness*4+lid_play*2
+    App.ActiveDocument.ActiveObject.Width = width+thickness*4+lid_play*2
+    App.ActiveDocument.ActiveObject.Height = lid_height + thickness
+    App.ActiveDocument.ActiveObject.Placement.Base = -thickness*2 - lid_play, \
+                                                     -thickness*2 - lid_play, \
+                                                     -thickness
+    cut_2_objects(lid_outside_name,lid_inside_name)
+    App.ActiveDocument.getObject('Cut001').Label = lid_cut_name
+    cut_2_objects("Cut001",lid_groove_right_name)
+    App.ActiveDocument.getObject('Cut002').Label = lid_cutr_name
+    cut_2_objects("Cut002",lid_groove_left_name)
+    App.ActiveDocument.getObject('Cut003').Label = lid_cutl_name
+    add_fillets_to_lid()
+    App.ActiveDocument.getObject('Fillet001').Label = lid_name
+    App.ActiveDocument.ActiveObject.Placement.Base = length + thickness*2 + 10, 0, 0
+    App.ActiveDocument.recompute()
+    App.getDocument("Unnamed").saveAs(u"/home/weigu/FreeCAD/simple_3d_print_box")
+    base_filename = "simple_3d_print_box"
+    doc = FreeCAD.activeDocument()
+    for obj in doc.Objects:
+        if obj.ViewObject.Visibility:
+            filename = base_filename + "_" + obj.Label + ".stl"
+            obj.Shape.exportStl(filename)
+    App.Console.PrintMessage("\ndone") # Write to console 
+
+def cut_2_objects(name1, name2):
+    bp = BOPFeatures.BOPFeatures(App.activeDocument())
+    bp.make_cut([name1,name2])
+
+def fuse_3_objects(name1, name2, name3):
+    bp = BOPFeatures.BOPFeatures(App.activeDocument())
+    bp.make_multi_fuse([name1, name2, name3])
+
+def add_fillets_to_case():
+    FreeCAD.ActiveDocument.addObject("Part::Fillet","Fillet")
+    FreeCAD.ActiveDocument.Fillet.Base = FreeCAD.ActiveDocument.Fusion
+    __fillets__ = []
+    __fillets__.append((18,1.00,1.00))
+    __fillets__.append((19,1.00,1.00))
+    __fillets__.append((20,1.00,1.00))
+    __fillets__.append((21,1.00,1.00))
+    __fillets__.append((23,1.00,1.00))
+    __fillets__.append((24,1.00,1.00))
+    __fillets__.append((28,1.00,1.00))
+    FreeCAD.ActiveDocument.Fillet.Edges = __fillets__
+    del __fillets__
+    FreeCADGui.ActiveDocument.Fusion.Visibility = False
+
+def add_fillets_to_lid():
+    FreeCAD.ActiveDocument.addObject("Part::Fillet","Fillet001")
+    FreeCAD.ActiveDocument.Fillet001.Base = FreeCAD.ActiveDocument.Cut003
+    __fillets__ = []
+    __fillets__.append((1,1.00,1.00))
+    __fillets__.append((3,1.00,1.00))
+    __fillets__.append((4,1.00,1.00))
+    __fillets__.append((5,1.00,1.00))
+    __fillets__.append((6,1.00,1.00))
+    __fillets__.append((14,1.00,1.00))
+    __fillets__.append((15,1.00,1.00))
+    __fillets__.append((16,1.00,1.00))
+    FreeCAD.ActiveDocument.Fillet001.Edges = __fillets__
+    del __fillets__
+    FreeCADGui.ActiveDocument.Cut003.Visibility = False
+
+def macro_body():
+    FreeCAD.Console.PrintMessage("\n'Simple 3d printable box macro by weigu.lu'\n")
+    ui = Box_UI()
+    FreeCADGui.Control.showDialog(ui)
+
+if __name__ == '__main__':
+    macro_body()
